@@ -205,6 +205,26 @@ export interface ConfigSchema {
     cdnURL: string
 
     /**
+     * Set the `crossorigin` attribute value Nuxt renders on tags for build assets
+     * (scripts, stylesheets and resource hints), including when they are served from
+     * a CDN through `app.cdnURL`.
+     *
+     * - `''` renders a bare `crossorigin` attribute (`anonymous` mode, the default)
+     * - `'anonymous'` is equivalent to the default
+     * - `'use-credentials'` sends cookies with asset requests
+     *
+     * This applies to server-rendered build assets, including early hints and `Link`
+     * headers. Credentials mode for client-side dynamic imports is still controlled
+     * by the bundler. This is unrelated to `experimental.crossOriginPrefetch`, which
+     * enables the Speculation Rules API.
+     *
+     * This can be set to a different value at runtime by setting the `NUXT_APP_CROSS_ORIGIN` environment variable.
+     *
+     * @default ""
+     */
+    crossOrigin: '' | 'anonymous' | 'use-credentials'
+
+    /**
      * Set default configuration for `<head>` on every page.
      *
      * @example

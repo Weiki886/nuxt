@@ -162,3 +162,56 @@ describe('noScripts route rules', () => {
     }
   })
 })
+
+describe('build asset crossOrigin', () => {
+  function renderWithCrossOrigin (crossOrigin: unknown) {
+    return render('/', {
+      runtimeConfig: () => ({
+        app: { baseURL: '/', buildAssetsDir: BUILD_ASSETS_DIR, cdnURL: '', crossOrigin, buildId: 'standalone' },
+        public: { greeting: 'hello from runtime config' },
+      }) as unknown as ReturnType<NuxtRendererOptions['runtimeConfig']>,
+    })
+  }
+
+  it('renders a bare crossorigin attribute by default', async () => {
+    const { html } = await renderWithCrossOrigin('')
+
+    expect(html).toContain(`<script type="module" src="${BUILD_ASSETS_DIR}`)
+    expect(html).toMatch(new RegExp(`<script type="module" src="${BUILD_ASSETS_DIR}[^"]*"[^>]*\\bcrossorigin(?!=)`))
+    expect(html).toContain('rel="preload" as="font" type="font/woff2" crossorigin')
+  })
+
+  it('renders crossorigin="use-credentials" on build asset tags', async () => {
+    const { html } = await renderWithCrossOrigin('use-credentials')
+
+    expect(html).toContain(`<script type="module" src="${BUILD_ASSETS_DIR}`)
+    expect(html).toMatch(new RegExp(`<script type="module" src="${BUILD_ASSETS_DIR}[^"]*" crossorigin="use-credentials">`))
+    expect(html).toContain('rel="modulepreload" as="script" crossorigin="use-credentials"')
+    expect(html).toContain('rel="preload" as="font" type="font/woff2" crossorigin="use-credentials"')
+
+    // payload fetches must never send credentials, regardless of the build asset setting
+    expect(html).not.toContain('as="fetch" crossorigin="use-credentials"')
+  })
+
+  it('normalises invalid values back to the bare attribute', async () => {
+    const { html } = await renderWithCrossOrigin('garbage')
+
+    expect(html).toMatch(new RegExp(`<script type="module" src="${BUILD_ASSETS_DIR}[^"]*"[^>]*\\bcrossorigin(?!=)`))
+    expect(html).not.toContain('crossorigin="garbage"')
+  })
+
+  it('rewrites the crossorigin parameter of early hint link headers', async () => {
+    const hints: string[] = []
+    await render('/', {
+      runtimeConfig: () => ({
+        app: { baseURL: '/', buildAssetsDir: BUILD_ASSETS_DIR, cdnURL: '', crossOrigin: 'use-credentials', buildId: 'standalone' },
+        public: { greeting: 'hello from runtime config' },
+      }) as unknown as ReturnType<NuxtRendererOptions['runtimeConfig']>,
+      writeEarlyHints: (_event, hint) => { hints.push(hint.link) },
+    })
+
+    expect(hints).toHaveLength(1)
+    expect(hints[0]).toContain('rel="modulepreload"; as="script"; crossorigin=use-credentials')
+    expect(hints[0]).toContain('as="font"; type="font/woff2"; crossorigin=use-credentials')
+  })
+})

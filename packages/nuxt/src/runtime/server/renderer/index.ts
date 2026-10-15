@@ -33,6 +33,7 @@ import { addPrerenderRoutes, appEvent, getRequestState } from './runtime'
 import { createRendererInstance } from './instance'
 import type { NuxtRendererInstance } from './instance'
 import type { NuxtRendererOptions, RendererEvent, RendererRouteRules } from './runtime'
+import { applyCrossOriginToLinkHeader, normalizeCrossOrigin, renderCrossOriginAttr, withCrossOrigin } from './cross-origin'
 import { NUXT_EARLY_404, NUXT_EARLY_HINTS, NUXT_HAS_NO_SCRIPTS_ROUTES, NUXT_INLINE_ERROR_RENDERING, NUXT_INLINE_STYLES, NUXT_NO_SCRIPTS, NUXT_NO_SCRIPTS_PATTERNS, NUXT_NO_SCRIPTS_PROD, NUXT_PAGE_PATTERNS, NUXT_PAYLOAD_EXTRACTION, NUXT_PAYLOAD_INLINE, NUXT_PRERENDER_ERROR_PAGES, NUXT_RUNTIME_PAYLOAD_EXTRACTION, NUXT_SSR_STREAMING, NUXT_SSR_STREAMING_BOT_RE, NUXT_VIEW_TRANSITIONS, PARSE_ERROR_DATA, appHead, appTeleportAttrs, appTeleportTag, componentIslands, componentIslandsActive, iifeChunkFileName, renderSSRHeadOptions, tracingChannelNuxt } from 'nuxt/internal/renderer-config'
 import entryIds from 'nuxt/internal/entry-ids'
 import { entryFileName } from 'nuxt/internal/entry-chunk'
@@ -303,11 +304,14 @@ async function renderRoute (instance: NuxtRendererInstance, event: RendererEvent
     patchDevClientCss(event, renderer.rendererContext)
   }
 
+  // `crossorigin` mode for build asset tags (overridable at runtime via NUXT_APP_CROSS_ORIGIN)
+  const crossOrigin = normalizeCrossOrigin(ssrContext.runtimeConfig.app.crossOrigin)
+
   // Render 103 Early Hints
   if (NUXT_EARLY_HINTS && !isRenderingPayload && !import.meta.prerender) {
     const { link } = renderResourceHeaders({}, renderer.rendererContext, { scripts: !NO_SCRIPTS })
     if (link) {
-      runtime.writeEarlyHints?.(event, { link })
+      runtime.writeEarlyHints?.(event, { link: applyCrossOriginToLinkHeader(link, crossOrigin) })
     }
   }
 
@@ -344,7 +348,7 @@ async function renderRoute (instance: NuxtRendererInstance, event: RendererEvent
   if (renderRouteResult instanceof Promise) { await renderRouteResult }
 
   if (NUXT_SSR_STREAMING && canStream && renderRouteContext.prefersStream) {
-    const streamArgs = { instance, event, ssrContext, renderer, routeOptions, ssrError, _PAYLOAD_EXTRACTION: _PAYLOAD_EXTRACTION!, _PAYLOAD_INLINE, payloadURL }
+    const streamArgs = { instance, event, ssrContext, renderer, routeOptions, ssrError, _PAYLOAD_EXTRACTION: _PAYLOAD_EXTRACTION!, _PAYLOAD_INLINE, payloadURL, crossOrigin }
     return tracingChannelNuxt
       ? traceAsync('nuxt.render', { event: hookEvent, ssrContext, streaming: true }, () => renderStreamedResponse(streamArgs))
       : renderStreamedResponse(streamArgs)
@@ -453,7 +457,7 @@ async function renderRoute (instance: NuxtRendererInstance, event: RendererEvent
     // Add CSS links in <head> for CSS files
     // - in production
     // - in dev mode when not rendering an island
-    link.push({ rel: 'stylesheet', href: renderer.rendererContext.buildAssetsURL(resource.file), crossorigin: '' })
+    link.push({ rel: 'stylesheet', href: renderer.rendererContext.buildAssetsURL(resource.file), crossorigin: crossOrigin })
   }
 
   if (link.length) {
@@ -480,12 +484,12 @@ async function renderRoute (instance: NuxtRendererInstance, event: RendererEvent
     }
   }
   const hints: Link[] = []
-  for (const l of getPreloadLinks(ssrContext, renderer.rendererContext, dependencyOptions) as Link[]) {
+  for (const l of withCrossOrigin(getPreloadLinks(ssrContext, renderer.rendererContext, dependencyOptions) as Link[], crossOrigin)) {
     if (!excludeHrefs.has(l.href)) {
       hints.push(l)
     }
   }
-  for (const l of getPrefetchLinks(ssrContext, renderer.rendererContext, dependencyOptions) as Link[]) {
+  for (const l of withCrossOrigin(getPrefetchLinks(ssrContext, renderer.rendererContext, dependencyOptions) as Link[], crossOrigin)) {
     if (!excludeHrefs.has(l.href)) {
       hints.push(l)
     }
@@ -521,7 +525,7 @@ async function renderRoute (instance: NuxtRendererInstance, event: RendererEvent
         // if we are rendering script tag payloads that import an async payload
         // we need to ensure this resolves before executing the Nuxt entry
         tagPosition: 'head',
-        crossorigin: '',
+        crossorigin: crossOrigin,
       })),
     })
   }
@@ -563,8 +567,9 @@ async function renderStreamedResponse (ctx: {
   _PAYLOAD_EXTRACTION: boolean
   _PAYLOAD_INLINE: boolean
   payloadURL: string | undefined
+  crossOrigin: ReturnType<typeof normalizeCrossOrigin>
 }): Promise<Response> {
-  const { instance, event, ssrContext, renderer, routeOptions, ssrError, _PAYLOAD_EXTRACTION, _PAYLOAD_INLINE, payloadURL } = ctx
+  const { instance, event, ssrContext, renderer, routeOptions, ssrError, _PAYLOAD_EXTRACTION, _PAYLOAD_INLINE, payloadURL, crossOrigin } = ctx
   const runtime = instance.options
   const hookEvent = appEvent(event)
   const NO_SCRIPTS = NUXT_NO_SCRIPTS || !!routeOptions?.noScripts
@@ -574,7 +579,7 @@ async function renderStreamedResponse (ctx: {
   // 1. Set HTTP Link headers with entry-point preload hints (fastest resource hinting)
   const { link: linkHeader } = renderResourceHeaders({}, renderer.rendererContext, { scripts: !NO_SCRIPTS })
   if (linkHeader) {
-    event.res.headers.append('link', linkHeader)
+    event.res.headers.append('link', applyCrossOriginToLinkHeader(linkHeader, crossOrigin))
   }
 
   // 2. Pre-compute entry-point inline styles for the shell
@@ -592,7 +597,7 @@ async function renderStreamedResponse (ctx: {
   const shellLinks: Link[] = []
   for (const resource of Object.values(entryStyles)) {
     if (import.meta.dev && 'inline' in getURLQuery(resource.file)) { continue }
-    shellLinks.push({ rel: 'stylesheet', href: renderer.rendererContext.buildAssetsURL(resource.file), crossorigin: '' })
+    shellLinks.push({ rel: 'stylesheet', href: renderer.rendererContext.buildAssetsURL(resource.file), crossorigin: crossOrigin })
   }
   if (shellLinks.length) {
     ssrContext.head.push({ link: shellLinks })
@@ -613,10 +618,10 @@ async function renderStreamedResponse (ctx: {
   }
 
   // Entry preload/prefetch links
-  const entryHints = [
+  const entryHints = withCrossOrigin([
     ...getPreloadLinks({}, renderer.rendererContext, { scripts: !NO_SCRIPTS }) as Link[],
     ...getPrefetchLinks({}, renderer.rendererContext, { scripts: !NO_SCRIPTS }) as Link[],
-  ]
+  ], crossOrigin)
   if (entryHints.length) {
     ssrContext.head.push({ link: entryHints })
   }
@@ -629,13 +634,16 @@ async function renderStreamedResponse (ctx: {
         src: renderer.rendererContext.buildAssetsURL(resource.file),
         defer: resource.module ? null : true,
         tagPosition: 'head',
-        crossorigin: '',
+        crossorigin: crossOrigin,
       })),
     })
   }
 
   // Preload streaming IIFE script (production only - in dev we inline it)
   if (!NO_SCRIPTS && !import.meta.dev && iifeChunkFileName) {
+    // The IIFE is a classic script: without `crossorigin` it is a no-cors request that
+    // sends cookies, so it keeps working behind cookie-gated CDNs without requiring CORS
+    // headers. The preload must match that request mode exactly.
     ssrContext.head.push({
       link: [{ rel: 'preload', as: 'script', href: runtime.buildAssetsURL(iifeChunkFileName) }],
     })
@@ -814,7 +822,7 @@ async function renderStreamedResponse (ctx: {
       if (emittedStyles.has(resource.file)) { continue }
       if (import.meta.dev && 'inline' in getURLQuery(resource.file)) { continue }
       emittedStyles.add(resource.file)
-      tags += `<link rel="stylesheet" crossorigin href="${renderer.rendererContext.buildAssetsURL(resource.file)}">`
+      tags += `<link rel="stylesheet"${renderCrossOriginAttr(crossOrigin)} href="${renderer.rendererContext.buildAssetsURL(resource.file)}">`
     }
     return tags
   }

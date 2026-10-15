@@ -19,6 +19,7 @@ import { createSSRContext, rethrowWithResponseHeaders, returnRenderResponse } fr
 import { renderInlineStyles } from 'nuxt/internal/renderer/inline-styles'
 import { getClientIslandResponse, getServerComponentHTML, getSlotIslandResponse } from 'nuxt/internal/renderer/islands'
 import { isStyleOfModule, patchDevClientCss } from 'nuxt/internal/renderer/dev-css'
+import { normalizeCrossOrigin } from 'nuxt/internal/renderer/cross-origin'
 import { urlHash } from 'nuxt/internal/renderer/url'
 import { createEvent } from '../utils/base'
 import { applyIslandPrerenderHints } from '../utils/prerender'
@@ -174,6 +175,7 @@ async function renderIsland (event: H3Event): Promise<IslandRenderResult> {
     // ... and patch it into the manifest.
     patchDevClientCss(event, renderer.rendererContext)
     const { styles } = getRequestDependencies(ssrContext, renderer.rendererContext)
+    const crossOrigin = normalizeCrossOrigin(ssrContext.runtimeConfig.app.crossOrigin)
 
     const link: Link[] = []
     const modules = ssrContext.modules ?? []
@@ -185,7 +187,7 @@ async function renderIsland (event: H3Event): Promise<IslandRenderResult> {
       // The dev CSS set covers the whole module graph, so restrict it to the styles of the
       // components this island rendered.
       if (isStyleOfModule(resource.file, modules)) {
-        link.push({ rel: 'stylesheet', href: renderer.rendererContext.buildAssetsURL(resource.file), crossorigin: '' })
+        link.push({ rel: 'stylesheet', href: renderer.rendererContext.buildAssetsURL(resource.file), crossorigin: crossOrigin })
       }
     }
     if (link.length) {
